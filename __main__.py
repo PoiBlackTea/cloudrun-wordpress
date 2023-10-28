@@ -8,6 +8,11 @@ import json
 config = pulumi.Config()
 gcp_config = pulumi.Config("gcp")
 gcp_region = gcp_config.require("region")
+wordpress_image = gcp_config.require("image")
+cloudsql = gcp_config.require("cloudsql")
+cloudsql_disk_size = cloudsql.require("disk_size")
+cloudsql_instance_tier = cloudsql.require("tier")
+cloudsql_user = cloudsql.require("user")
 
 # create custom vpc
 wordpress_network = gcp.compute.Network("wordpress-vpc",
@@ -22,34 +27,81 @@ wordpress_subnetwork = gcp.compute.Subnetwork("dataflow-demo-subnet1",
     region=gcp_region,
     network=wordpress_network.id)
 
-
-
-custom_test_network = gcp.compute.Network("customTestNetwork", auto_create_subnetworks=False)
-custom_test_subnetwork = gcp.compute.Subnetwork("customTestSubnetwork",
-    ip_cidr_range="10.2.0.0/28",
-    region="us-central1",
-    network=custom_test_network.id)
-
-connector = gcp.vpcaccess.Connector("connector",
+# create vpc access connector
+connector = gcp.vpcaccess.Connector("cloudrun-connector",
     subnet=gcp.vpcaccess.ConnectorSubnetArgs(
-        name=custom_test_subnetwork.name,
+        name=wordpress_subnetwork.name,
     ),
-    machine_type="e2-standard-4",
-    min_instances=2,
-    max_instances=3,
-    region="us-central1")
-default = gcp.cloudrunv2.Service("default",
-    location="us-central1",
+    region=gcp_region)
+
+workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
+    location=gcp_region,
     template=gcp.cloudrunv2.ServiceTemplateArgs(
         containers=[gcp.cloudrunv2.ServiceTemplateContainerArgs(
-            image="us-docker.pkg.dev/cloudrun/container/hello",
+            image=wordpress_image,
+            envs=[],
+            resources=gcp.cloudrunv2.ServiceTemplateContainerResourcesArgs(
+                cpu_idle=False,
+                limits=['2', '2']
+            ),
+            scaling=gcp.cloudrunv2.ServiceTemplateScalingArgs(
+                max_instance_count=10,
+                min_instance_count=1
+            )
         )],
         vpc_access=gcp.cloudrunv2.ServiceTemplateVpcAccessArgs(
             connector=connector.id,
-            egress="ALL_TRAFFIC",
+            egress="PRIVATE_RANGES_ONLY",
         ),
+        session_affinity=True
     ))
 
+
+# cloudsql ip address
+private_ip_address = gcp.compute.GlobalAddress("cloudsql-privateip",
+    purpose="VPC_PEERING",
+    address_type="INTERNAL",
+    prefix_length=28,
+    network=wordpress_network.id)
+# cloudsql private connector
+private_vpc_connection = gcp.servicenetworking.Connection("privateVpcConnection",
+    network=wordpress_network.id,
+    service="servicenetworking.googleapis.com",
+    reserved_peering_ranges=[private_ip_address.name])
+
+# create cloudsql 
+workpress_cloudsql = gcp.sql.DatabaseInstance("wordpress-database",
+    region=gcp_region,
+    database_version="MYSQL_8_0",
+    settings=gcp.sql.DatabaseInstanceSettingsArgs(
+        tier=cloudsql_instance_tier,
+        disk_autoresize=False,
+        disk_size=cloudsql_disk_size,
+        disk_type="PD_SSD",
+        availability_type="ZONAL",
+        ip_configuration=gcp.sql.DatabaseInstanceSettingsIpConfigurationArgs(
+            ipv4_enabled=False,
+            private_network=wordpress_network.id,
+            enable_private_path_for_google_cloud_services=True,
+        ),
+        backup_configuration=gcp.sql.DatabaseInstanceSettingsBackupConfigurationArgs(
+            binary_log_enabled=True,
+            enabled=True,
+            backup_retention_settings=gcp.sql.DatabaseInstanceSettingsBackupConfigurationBackupRetentionSettingsArgs(
+                retained_backups=7,
+            )
+        )
+    ),
+    deletion_protection=True,
+    opts=pulumi.ResourceOptions(
+        depends_on=[private_vpc_connection])
+        )
+
+# create cloudsql user
+dataflow_user = gcp.sql.User(cloudsql_user,
+    instance=workpress_cloudsql.name,
+    password=config.require_secret('dbPassword'),
+    type="BUILT_IN")
 
 
 
@@ -60,7 +112,7 @@ default_firewall = gcp.compute.Firewall("allow-cloud run",
         gcp.compute.FirewallAllowArgs(
             protocol="tcp",
             ports=[
-                "22",
+                "111,2049",
             ],
         ),
     ],
@@ -96,50 +148,13 @@ private_vpc_connection = gcp.servicenetworking.Connection("privateVpcConnection"
     service="servicenetworking.googleapis.com",
     reserved_peering_ranges=[private_ip_address.name])
 
-# create cloudsql 
-instance = gcp.sql.DatabaseInstance("dataflow-soruce-database",
-    region="us-central1",
-    database_version="MYSQL_8_0",
-    settings=gcp.sql.DatabaseInstanceSettingsArgs(
-        tier="db-f1-micro",
-        disk_autoresize=False,
-        disk_size=10,
-        disk_type="PD_HDD",
-        availability_type="ZONAL",
-        ip_configuration=gcp.sql.DatabaseInstanceSettingsIpConfigurationArgs(
-            ipv4_enabled=False,
-            private_network=vpc_network.id,
-            enable_private_path_for_google_cloud_services=True,
-        ),
-        backup_configuration=gcp.sql.DatabaseInstanceSettingsBackupConfigurationArgs(
-            binary_log_enabled=False,
-            enabled=False,
-            backup_retention_settings=gcp.sql.DatabaseInstanceSettingsBackupConfigurationBackupRetentionSettingsArgs(
-                retained_backups=3,
-            )
-        )
-    ),
-    deletion_protection=False,
-    opts=pulumi.ResourceOptions(
-        depends_on=[private_vpc_connection])
-        )
-
-# create cloudsql user
-dataflow_user = gcp.sql.User("dataflow",
-    instance=instance.name,
-    password=config.require_secret('dbPassword'),
-    type="BUILT_IN")
 
 
 
-# create bucket import sql file
+
+# create bucket
 bucket = gcp.storage.Bucket('dataflow-demo-bucket',
                             location="us-central1")
-bucketObject = gcp.storage.BucketObject(
-    'demo.sql',
-    bucket=bucket.name,
-    source=pulumi.FileAsset('demo.sql')
-)
 
 pulumi.export("Cloud Storage Object Path", pulumi.Output.all(bucket.url, bucketObject.output_name) \
     .apply(lambda args: f"{args[0]}/{args[1]}"))
