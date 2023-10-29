@@ -3,7 +3,6 @@
 import pulumi
 import pulumi_gcp as gcp
 
-import json
 
 config = pulumi.Config()
 gcp_config = pulumi.Config("gcp")
@@ -13,6 +12,41 @@ cloudsql = gcp_config.require("cloudsql")
 cloudsql_disk_size = cloudsql.require("disk_size")
 cloudsql_instance_tier = cloudsql.require("tier")
 cloudsql_user = cloudsql.require("user")
+cloudsql_db = cloudsql.require("db")
+
+# gce startup_script for wordpress nfs
+startup_script = """#!/bin/bash
+apt update -y 
+apt upgrade -y
+apt install nfs-kernel-server -y
+mkdir -p /opt/nfs
+curl https://downloads.bitnami.com/files/stacksmith/wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz -O
+tar -zxf wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz
+cp -ri wordpress-6.3.2-1-linux-amd64-debian-11/files/wordpress/wp-content/* /opt/nfs
+chown -R daemon:www-data /opt/nfs
+chmod -R 666 /opt/nfs
+curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+add-google-cloud-ops-agent-repo.sh --also-install
+apt autoremove -y"""
+
+
+
+# create wordpress service account
+service_account = gcp.service_account.Account("serviceAccount",
+    account_id="workpress-sa",
+    display_name="workpress sa")
+
+
+# create secret manager secret
+secret = gcp.secretmanager.Secret("secret",
+    secret_id="workpress-db_pass",
+    replication=gcp.secretmanager.SecretReplicationArgs(
+        auto=gcp.secretmanager.SecretReplicationAutoArgs(),
+    ))
+secret_version_data = gcp.secretmanager.SecretVersion("secret-version-data",
+    secret=secret.name,
+    secret_data=config.require_secret('dbPassword'))
+
 
 # create custom vpc
 wordpress_network = gcp.compute.Network("wordpress-vpc",
@@ -25,7 +59,8 @@ wordpress_network = gcp.compute.Network("wordpress-vpc",
 wordpress_subnetwork = gcp.compute.Subnetwork("dataflow-demo-subnet1",
     ip_cidr_range="10.0.0.0/24",
     region=gcp_region,
-    network=wordpress_network.id)
+    network=wordpress_network.id,
+    private_ip_google_access=True)
 
 # create vpc access connector
 connector = gcp.vpcaccess.Connector("cloudrun-connector",
@@ -34,28 +69,22 @@ connector = gcp.vpcaccess.Connector("cloudrun-connector",
     ),
     region=gcp_region)
 
-workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
-    location=gcp_region,
-    template=gcp.cloudrunv2.ServiceTemplateArgs(
-        containers=[gcp.cloudrunv2.ServiceTemplateContainerArgs(
-            image=wordpress_image,
-            envs=[],
-            resources=gcp.cloudrunv2.ServiceTemplateContainerResourcesArgs(
-                cpu_idle=False,
-                limits=['2', '2']
-            ),
-            scaling=gcp.cloudrunv2.ServiceTemplateScalingArgs(
-                max_instance_count=10,
-                min_instance_count=1
-            )
-        )],
-        vpc_access=gcp.cloudrunv2.ServiceTemplateVpcAccessArgs(
-            connector=connector.id,
-            egress="PRIVATE_RANGES_ONLY",
-        ),
-        session_affinity=True
+# create vpc nat
+addr = gcp.compute.Address("addr", region=gcp_region)
+router = gcp.compute.Router("router",
+    region=wordpress_subnetwork.region,
+    network=wordpress_network.id
+    )
+nat = gcp.compute.RouterNat("nat",
+    router=router.name,
+    region=router.region,
+    nat_ip_allocate_option="MANUAL_ONLY",
+    nat_ips=[addr.self_link],
+    source_subnetwork_ip_ranges_to_nat="ALL_SUBNETWORKS_ALL_IP_RANGES",
+    log_config=gcp.compute.RouterNatLogConfigArgs(
+        enable=True,
+        filter="ERRORS_ONLY",
     ))
-
 
 # cloudsql ip address
 private_ip_address = gcp.compute.GlobalAddress("cloudsql-privateip",
@@ -103,65 +132,140 @@ dataflow_user = gcp.sql.User(cloudsql_user,
     password=config.require_secret('dbPassword'),
     type="BUILT_IN")
 
+# create workpress database
+database = gcp.sql.Database(name=cloudsql_db, 
+                            charset="utf8mb4",
+                            instance=workpress_cloudsql.name)
 
-
-# create firewall allow ingress from load balancer health traffic
-default_firewall = gcp.compute.Firewall("allow-cloud run",
-    network=vpc_network.name,
-    allows=[
-        gcp.compute.FirewallAllowArgs(
-            protocol="tcp",
-            ports=[
-                "111,2049",
-            ],
-        ),
+# create GCE for nfs
+default_account = gcp.service_account.Account("defaultAccount",
+    account_id="nfs",
+    display_name="nfs")
+nfs_instance = gcp.compute.Instance("defaultInstance",
+    machine_type="e2-medium",
+    zone=f"{gcp_region}-a",
+    tags=[
+        "nfs"
     ],
-    priority=500,
-    source_ranges=["Cloud Run service conect access ip"])
-
-
-# create firewall allow dataflow mysql traffic
-default_firewall = gcp.compute.Firewall("allow-from-dataflow-worker",
-    network=vpc_network.name,
-    allows=[
-        gcp.compute.FirewallAllowArgs(
-            protocol="tcp",
-            ports=[
-                "3306",
-                "12345-12346"
-            ],
+    boot_disk=gcp.compute.InstanceBootDiskArgs(
+        initialize_params=gcp.compute.InstanceBootDiskInitializeParamsArgs(
+            image="ubuntu-os-cloud/ubuntu-2204-lts",
+            size=50
         ),
-    ],
-    priority=500,
-    source_ranges=["10.0.0.0/24"])
+    ),
+    scratch_disks=[gcp.compute.InstanceScratchDiskArgs(
+        interface="SCSI",
+    )],
+    network_interfaces=[gcp.compute.InstanceNetworkInterfaceArgs(
+        network=wordpress_network,
+        network_ip="10.0.2.64/32", # nfs private ip
+        access_configs=[gcp.compute.InstanceNetworkInterfaceAccessConfigArgs(
+            nat_ip=""
+        )],
+    )],
+    metadata_startup_script=startup_script,
+    service_account=gcp.compute.InstanceServiceAccountArgs(
+        email=default_account.email,
+        scopes=["cloud-platform"],
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[nat]),
+    )
 
 
-# cloudsql ip address
-private_ip_address = gcp.compute.GlobalAddress("cloudsql-privateip",
-    purpose="VPC_PEERING",
-    address_type="INTERNAL",
-    prefix_length=16,
-    network=vpc_network.id)
-# cloudsql private connector
-private_vpc_connection = gcp.servicenetworking.Connection("privateVpcConnection",
-    network=vpc_network.id,
-    service="servicenetworking.googleapis.com",
-    reserved_peering_ranges=[private_ip_address.name])
+# create cloud run service
+workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
+    location=gcp_region,
+    ingress="INGRESS_TRAFFIC_ALL",
+    template=gcp.cloudrunv2.ServiceTemplateArgs(
+        containers=[gcp.cloudrunv2.ServiceTemplateContainerArgs(
+            image=wordpress_image,
+            envs=[
+                    gcp.cloudrunv2.ServiceTemplateSpecContainerEnvArgs(
+                        name="WORDPRESS_DATABASE_HOST",
+                        value=workpress_cloudsql.private_ip_address,
+                    ),
+                    gcp.cloudrunv2.ServiceTemplateSpecContainerEnvArgs(
+                        name="WORDPRESS_DATABASE_NAME",
+                        value=cloudsql_db,
+                    ),
+                    gcp.cloudrunv2.ServiceTemplateSpecContainerEnvArgs(
+                        name="WORDPRESS_DATABASE_USER",
+                        value=cloudsql_user,
+                    ),
+                    gcp.cloudrunv2.ServiceTemplateSpecContainerEnvArgs(
+                        name="WORDPRESS_ENABLE_REVERSE_PROXY",
+                        value="yes",
+                    ),
+                    gcp.cloudrunv2.ServiceTemplateSpecContainerEnvArgs(
+                        name="WORDPRESS_PLUGINS",
+                        value="wp-stateless",
+                    ),
+                    gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
+                    name="WORDPRESS_DATABASE_PASSWORD",
+                    value_source=gcp.cloudrunv2.ServiceTemplateContainerEnvValueSourceArgs(
+                        secret_key_ref=gcp.cloudrunv2.ServiceTemplateContainerEnvValueSourceSecretKeyRefArgs(
+                            secret=secret.secret_id,
+                            version="1",
+                        ),
+                    ),
+                ),
+            ],
+            resources=gcp.cloudrunv2.ServiceTemplateContainerResourcesArgs(
+                cpu_idle=False,
+                limits=['2', '2']
+            ),
+            scaling=gcp.cloudrunv2.ServiceTemplateScalingArgs(
+                max_instance_count=10,
+                min_instance_count=1
+            )
+        )],
+        volumes=[
+            gcp.cloudrunv2.ServiceTemplateVolumeArgs(
+                name="cloudsql",
+                cloud_sql_instance=gcp.cloudrunv2.ServiceTemplateVolumeCloudSqlInstanceArgs(
+                instances=[workpress_cloudsql.connection_name],
+                ),
+            )
+        ],
+        vpc_access=gcp.cloudrunv2.ServiceTemplateVpcAccessArgs(
+            connector=connector.id,
+            egress="ALL_TRAFFIC",
+        ),
+        execution_environment="EXECUTION_ENVIRONMENT_GEN2",
+        service_account=service_account.email,
+        timeout="3600",
+        session_affinity=True,
+    ),
+    traffics=[gcp.cloudrunv2.ServiceTrafficArgs(
+        type="TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST",
+        percent=100,
+    )],
+    opts=pulumi.ResourceOptions(depends_on=[secret_version_data, database, nfs_instance])
+    )
 
+project = gcp.organizations.get_project()
+secret_access = gcp.secretmanager.SecretIamMember("secret-access",
+    secret_id=secret.id,
+    role="roles/secretmanager.secretAccessor",
+    member=f"serviceAccount:{service_account.email}",
+    opts=pulumi.ResourceOptions(depends_on=[secret]))
 
 
 
 
 # create bucket
-bucket = gcp.storage.Bucket('dataflow-demo-bucket',
-                            location="us-central1")
+bucket = gcp.storage.Bucket('workpress-bucket',
+                            location=gcp_region)
 
-pulumi.export("Cloud Storage Object Path", pulumi.Output.all(bucket.url, bucketObject.output_name) \
-    .apply(lambda args: f"{args[0]}/{args[1]}"))
+member = gcp.storage.BucketIAMMember("member",
+    bucket=bucket.id,
+    role="roles/storage.admin",
+    member=f"serviceAccount:{service_account.email}")
 
-pulumi.export("Cloud SQL Name", pulumi.Output.format(instance.name))
-pulumi.export("Cloud SQL IP", pulumi.Output.format(instance.private_ip_address))
-pulumi.export("Cloud SQL user", pulumi.Output.format(dataflow_user.id))
+pulumi.export("cloud_sql_instance_name", pulumi.Output.format(workpress_cloudsql.name))
+pulumi.export("Cloud SQL IP", pulumi.Output.format(workpress_cloudsql.private_ip_address))
 
-pulumi.export("VPC", pulumi.Output.format(vpc_network.self_link))
-pulumi.export("Subnet", pulumi.Output.format(dataflow_subnet1.self_link))
+pulumi.export("VPC", pulumi.Output.format(wordpress_network.self_link))
+pulumi.export("Subnet", pulumi.Output.format(wordpress_subnetwork.self_link))
+
+pulumi.export("cloud run url", pulumi.Output.format(workpress_cloudrun.uri))
