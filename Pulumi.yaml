@@ -1,0 +1,6 @@
+name: cloudrun_workpress
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: workpress running on cloud run
