@@ -21,12 +21,11 @@ apt upgrade -y
 apt install nfs-kernel-server -y
 mkdir -p /opt/nfs
 curl https://downloads.bitnami.com/files/stacksmith/wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz -O
-tar -zxf wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz
-cp -ri wordpress-6.3.2-1-linux-amd64-debian-11/files/wordpress/wp-content/* /opt/nfs
+tar -zxf wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz -C /opt/nfs --strip-components=4 --no-same-owner --wildcards '*/files/wordpress/wp-content/*'
 chown -R daemon:www-data /opt/nfs
 chmod -R 666 /opt/nfs
 curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
-add-google-cloud-ops-agent-repo.sh --also-install
+bash add-google-cloud-ops-agent-repo.sh --also-install
 apt autoremove -y"""
 
 
