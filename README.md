@@ -1,8 +1,5 @@
-$ export GOOGLE_PROJECT=YOURPROJECTID; export GOOGLE_REGION=asia-east1; export GOOGLE_ZONE=asia-east1-a;
-$ export GOOGLE_CREDENTIALS=YOURGCPCREDENTIALS
 
-
-
+設定 pulumi config
 ``````
 $ pulumi stack init testing
 $ pulumi config set gcp:project <your-gcp-project>
@@ -14,6 +11,8 @@ $ pulumi config set workpress:user <user>
 $ pulumi config set workpress:db <db>
 $ pulumi config set --secret workpress:dbPassword [your-database-password-here]
 ```
+
+待完成設定 Load Balancer, Cloud CDN
 LB 和cdn設定
 
 cloud sql instance type https://cloud.google.com/sql/docs/mysql/instance-settings

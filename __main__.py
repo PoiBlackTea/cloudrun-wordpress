@@ -24,8 +24,8 @@ mkdir -p /opt/nfs
 curl https://downloads.bitnami.com/files/stacksmith/wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz -O
 tar -zxf wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz -C /opt/nfs --strip-components=4 --no-same-owner --wildcards '*/files/wordpress/wp-content/*'
 chown -R daemon:www-data /opt/nfs
-chmod -R 666 /opt/nfs
-echo '/opt/nfs 10.0.0.0/8(rw,sync,no_subtree_check,no_root_squash) > /etc/exports'
+chmod -R 766 /opt/nfs
+echo '/opt/nfs 10.0.0.0/8(rw,sync,no_subtree_check,no_root_squash)' > /etc/exports
 systemctl restart nfs-server 
 systemctl enable nfs-server
 curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
@@ -252,7 +252,7 @@ workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
 
 # Grant the 'roles/run.invoker' role to 'allUsers' for the newly created service
 service_iam_member = gcp.cloudrunv2.ServiceIamMember("service-iam-member", 
-    name=workpress_cloudrun.name,
+    name=workpress_cloudrun.id,
     role="roles/run.invoker",
     member="allUsers"
 )
@@ -290,20 +290,20 @@ default_firewall = gcp.compute.Firewall("allow-from-iap",
     priority=500,
     source_ranges=["35.235.240.0/20"])
 
-cloudrun_firewall = gcp.compute.Firewall("allow-from-cloudrun",
-    network=wordpress_network.name,
-    allows=[
-        gcp.compute.FirewallAllowArgs(
-            protocol="tcp",
-            ports=[
-                "3306",
-                "111",
-                "2049"
-            ],
-        ),
-    ],
-    priority=500,
-    source_ranges=["10.8.0.0/28"])
+# cloudrun_firewall = gcp.compute.Firewall("allow-from-cloudrun",
+#     network=wordpress_network.name,
+#     allows=[
+#         gcp.compute.FirewallAllowArgs(
+#             protocol="tcp",
+#             ports=[
+#                 "3306",
+#                 "111",
+#                 "2049"
+#             ],
+#         ),
+#     ],
+#     priority=500,
+#     source_ranges=["10.8.0.0/28"])
 
 
 pulumi.export("cloud_sql_instance_name", pulumi.Output.format(workpress_cloudsql.name))
