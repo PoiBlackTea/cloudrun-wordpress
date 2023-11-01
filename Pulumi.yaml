@@ -1,6 +1,6 @@
-name: cloudrun_workpress
+name: cloudrun_wordpress
 runtime:
   name: python
   options:
     virtualenv: venv
-description: workpress running on cloud run
+description: wordpress running on cloud run

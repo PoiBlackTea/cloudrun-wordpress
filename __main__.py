@@ -8,12 +8,12 @@ config = pulumi.Config()
 gcp_config = pulumi.Config("gcp")
 gcp_region = gcp_config.require("region")
 
-workpress = pulumi.Config("workpress")
-wordpress_image = workpress.require("image")
-cloudsql_disk_size = workpress.require("disk_size")
-cloudsql_instance_tier = workpress.require("tier")
-cloudsql_user = workpress.require("user")
-cloudsql_db = workpress.require("db")
+wordpress = pulumi.Config("wordpress")
+wordpress_image = wordpress.require("image")
+cloudsql_disk_size = wordpress.require("disk_size")
+cloudsql_instance_tier = wordpress.require("tier")
+cloudsql_user = wordpress.require("user")
+cloudsql_db = wordpress.require("db")
 
 # gce startup_script for wordpress nfs
 startup_script = """#!/bin/bash
@@ -36,19 +36,19 @@ apt autoremove -y"""
 
 # create wordpress service account
 service_account = gcp.serviceaccount.Account("serviceAccount",
-    account_id="workpress-sa",
-    display_name="workpress sa")
+    account_id="wordpress-sa",
+    display_name="wordpress sa")
 
 
 # create secret manager secret
 secret = gcp.secretmanager.Secret("secret",
-    secret_id="workpress-db_pass",
+    secret_id="wordpress-db_pass",
     replication=gcp.secretmanager.SecretReplicationArgs(
         auto=gcp.secretmanager.SecretReplicationAutoArgs(),
     ))
 secret_version_data = gcp.secretmanager.SecretVersion("secret-version-data",
     secret=secret.name,
-    secret_data=workpress.require_secret('dbPassword'))
+    secret_data=wordpress.require_secret('dbPassword'))
 
 
 # create custom vpc
@@ -102,7 +102,7 @@ private_vpc_connection = gcp.servicenetworking.Connection("privateVpcConnection"
     reserved_peering_ranges=[private_ip_address.name])
 
 # create cloudsql 
-workpress_cloudsql = gcp.sql.DatabaseInstance("wordpress-database",
+wordpress_cloudsql = gcp.sql.DatabaseInstance("wordpress-database",
     region=gcp_region,
     database_version="MYSQL_8_0",
     settings=gcp.sql.DatabaseInstanceSettingsArgs(
@@ -130,15 +130,15 @@ workpress_cloudsql = gcp.sql.DatabaseInstance("wordpress-database",
         )
 
 # create cloudsql user
-workpress_user = gcp.sql.User(cloudsql_user,
-    instance=workpress_cloudsql.name,
-    password=workpress.require_secret('dbPassword'),
+wordpress_user = gcp.sql.User(cloudsql_user,
+    instance=wordpress_cloudsql.name,
+    password=wordpress.require_secret('dbPassword'),
     type="BUILT_IN")
 
-# create workpress database
+# create wordpress database
 database = gcp.sql.Database(resource_name=cloudsql_db, 
                             charset="utf8mb4",
-                            instance=workpress_cloudsql.name)
+                            instance=wordpress_cloudsql.name)
 
 # Create a static IP
 address = gcp.compute.Address('address',
@@ -178,7 +178,7 @@ nfs_instance = gcp.compute.Instance("nfs-server-instance",
 
 
 # create cloud run service
-workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
+wordpress_cloudrun = gcp.cloudrunv2.Service("wordpress",
     location=gcp_region,
     ingress="INGRESS_TRAFFIC_ALL",
     template=gcp.cloudrunv2.ServiceTemplateArgs(
@@ -187,7 +187,7 @@ workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
             envs=[
                     gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
                         name="WORDPRESS_DATABASE_HOST",
-                        value=workpress_cloudsql.private_ip_address,
+                        value=wordpress_cloudsql.private_ip_address,
                     ),
                     gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
                         name="WORDPRESS_DATABASE_NAME",
@@ -195,15 +195,11 @@ workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
                     ),
                     gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
                         name="WORDPRESS_DATABASE_USER",
-                        value=workpress_user.name,
+                        value=wordpress_user.name,
                     ),
                     gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
                         name="WORDPRESS_ENABLE_REVERSE_PROXY",
                         value="yes",
-                    ),
-                    gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
-                        name="WORDPRESS_PLUGINS",
-                        value="wp-stateless",
                     ),
                     gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
                         name="NFSIP",
@@ -228,7 +224,7 @@ workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
             gcp.cloudrunv2.ServiceTemplateVolumeArgs(
                 name="cloudsql",
                 cloud_sql_instance=gcp.cloudrunv2.ServiceTemplateVolumeCloudSqlInstanceArgs(
-                instances=[workpress_cloudsql.connection_name],
+                instances=[wordpress_cloudsql.connection_name],
                 ),
             )
         ],
@@ -254,7 +250,7 @@ workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
 
 # Grant the 'roles/run.invoker' role to 'allUsers' for the newly created service
 service_iam_member = gcp.cloudrunv2.ServiceIamMember("service-iam-member", 
-    name=workpress_cloudrun.id,
+    name=wordpress_cloudrun.id,
     role="roles/run.invoker",
     member="allUsers"
 )
@@ -270,7 +266,7 @@ secret_access = gcp.secretmanager.SecretIamMember("secret-access",
 
 
 # create bucket
-bucket = gcp.storage.Bucket('workpress-bucket',
+bucket = gcp.storage.Bucket('wordpress-bucket',
                             location=gcp_region)
 
 member = gcp.storage.BucketIAMMember("member",
@@ -308,10 +304,10 @@ default_firewall = gcp.compute.Firewall("allow-from-iap",
 #     source_ranges=["10.8.0.0/28"])
 
 
-pulumi.export("cloud_sql_instance_name", pulumi.Output.format(workpress_cloudsql.name))
-pulumi.export("Cloud SQL IP", pulumi.Output.format(workpress_cloudsql.private_ip_address))
+pulumi.export("cloud_sql_instance_name", pulumi.Output.format(wordpress_cloudsql.name))
+pulumi.export("Cloud SQL IP", pulumi.Output.format(wordpress_cloudsql.private_ip_address))
 
 pulumi.export("VPC", pulumi.Output.format(wordpress_network.self_link))
 pulumi.export("Subnet", pulumi.Output.format(wordpress_subnetwork.self_link))
 
-pulumi.export("cloud run url", pulumi.Output.format(workpress_cloudrun.uri))
+pulumi.export("cloud run url", pulumi.Output.format(wordpress_cloudrun.uri))
