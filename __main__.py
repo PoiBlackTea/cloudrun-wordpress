@@ -8,12 +8,12 @@ config = pulumi.Config()
 gcp_config = pulumi.Config("gcp")
 gcp_region = gcp_config.require("region")
 
-cloudsql = pulumi.Config("workpress")
-wordpress_image = cloudsql.require("image")
-cloudsql_disk_size = cloudsql.require("disk_size")
-cloudsql_instance_tier = cloudsql.require("tier")
-cloudsql_user = cloudsql.require("user")
-cloudsql_db = cloudsql.require("db")
+workpress = pulumi.Config("workpress")
+wordpress_image = workpress.require("image")
+cloudsql_disk_size = workpress.require("disk_size")
+cloudsql_instance_tier = workpress.require("tier")
+cloudsql_user = workpress.require("user")
+cloudsql_db = workpress.require("db")
 
 # gce startup_script for wordpress nfs
 startup_script = """#!/bin/bash
@@ -25,7 +25,7 @@ curl https://downloads.bitnami.com/files/stacksmith/wordpress-6.3.2-1-linux-amd6
 tar -zxf wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz -C /opt/nfs --strip-components=4 --no-same-owner --wildcards '*/files/wordpress/wp-content/*'
 chown -R daemon:www-data /opt/nfs
 chmod -R 766 /opt/nfs
-echo '/opt/nfs 10.0.0.0/8(rw,sync,no_subtree_check,no_root_squash)' > /etc/exports
+echo '/opt/nfs 10.8.0.0/28(rw,sync,no_subtree_check,no_root_squash)' > /etc/exports
 systemctl restart nfs-server 
 systemctl enable nfs-server
 curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
@@ -48,7 +48,7 @@ secret = gcp.secretmanager.Secret("secret",
     ))
 secret_version_data = gcp.secretmanager.SecretVersion("secret-version-data",
     secret=secret.name,
-    secret_data=cloudsql.require_secret('dbPassword'))
+    secret_data=workpress.require_secret('dbPassword'))
 
 
 # create custom vpc
@@ -124,7 +124,7 @@ workpress_cloudsql = gcp.sql.DatabaseInstance("wordpress-database",
             )
         )
     ),
-    deletion_protection=False,
+    deletion_protection=True,
     opts=pulumi.ResourceOptions(
         depends_on=[private_vpc_connection])
         )
@@ -132,7 +132,7 @@ workpress_cloudsql = gcp.sql.DatabaseInstance("wordpress-database",
 # create cloudsql user
 workpress_user = gcp.sql.User(cloudsql_user,
     instance=workpress_cloudsql.name,
-    password=cloudsql.require_secret('dbPassword'),
+    password=workpress.require_secret('dbPassword'),
     type="BUILT_IN")
 
 # create workpress database
@@ -144,7 +144,6 @@ database = gcp.sql.Database(resource_name=cloudsql_db,
 address = gcp.compute.Address('address',
                               subnetwork=wordpress_subnetwork.id,
                               address_type="INTERNAL",
-                              address="10.0.2.64",
                               region=gcp_region)
 
 # create GCE for nfs
@@ -153,6 +152,7 @@ default_account = gcp.serviceaccount.Account("defaultAccount",
     display_name="nfs")
 nfs_instance = gcp.compute.Instance("nfs-server-instance",
     machine_type="e2-medium",
+    deletion_protection=True,
     zone=f"{gcp_region}-a",
     tags=[
         "nfs"
@@ -167,8 +167,6 @@ nfs_instance = gcp.compute.Instance("nfs-server-instance",
         network=wordpress_network.id,
         subnetwork=wordpress_subnetwork.id,
         network_ip=address.address, # nfs private ip
-        access_configs=[gcp.compute.InstanceNetworkInterfaceAccessConfigArgs(
-        )],
     )],
     metadata_startup_script=startup_script,
     service_account=gcp.compute.InstanceServiceAccountArgs(
@@ -206,6 +204,10 @@ workpress_cloudrun = gcp.cloudrunv2.Service("workpress",
                     gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
                         name="WORDPRESS_PLUGINS",
                         value="wp-stateless",
+                    ),
+                    gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
+                        name="NFSIP",
+                        value=address.address,
                     ),
                     gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
                     name="WORDPRESS_DATABASE_PASSWORD",
