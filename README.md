@@ -9,6 +9,8 @@ We will be deploying to Google Cloud Platform (GCP), so you will need an account
 This example assumes that you have GCP's `gcloud` CLI on your path. This is installed as part of the
 [GCP SDK](https://cloud.google.com/sdk/).
 
+Wordpress image base on bitnami [wordpress-nginx](https://hub.docker.com/r/bitnami/wordpress-nginx/)
+
 ## Running the Example
 
 After cloning this repo, `cd` into it and run these commands. 
