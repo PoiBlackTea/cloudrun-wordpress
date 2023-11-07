@@ -178,7 +178,7 @@ nfs_instance = gcp.compute.Instance("nfs-server-instance",
     )
 
 # create gce scheduled snapshot
-Scheduled_snapshot_policy = gcp.compute.ResourcePolicy("scheduled_snapshot_policy",
+Scheduled_snapshot_policy = gcp.compute.ResourcePolicy("snapshot-policy",
     description="scheduled snapshot",
     region=gcp_region,
     snapshot_schedule_policy=gcp.compute.ResourcePolicySnapshotSchedulePolicyArgs(
@@ -193,13 +193,15 @@ Scheduled_snapshot_policy = gcp.compute.ResourcePolicy("scheduled_snapshot_polic
             ),
         ),
         snapshot_properties=gcp.compute.ResourcePolicySnapshotSchedulePolicySnapshotPropertiesArgs(
-            chain_name="scheduled_snapshot",
+            chain_name="scheduled-snapshot",
             storage_locations=gcp_region
         ),
     ))
 
+boot_disk = pulumi.Output.all(nfs_instance.boot_disk.source).apply(lambda args: (f"{args}".split('/')[-1][:-2]))
+
 Attachment = gcp.compute.DiskResourcePolicyAttachment("attachment",
-    disk=nfs_instance.boot_disks[0].device_name,
+    disk=boot_disk,
     name=Scheduled_snapshot_policy.name,
     zone=gcp_zone)
 
