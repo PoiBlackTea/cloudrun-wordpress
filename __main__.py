@@ -59,7 +59,7 @@ wordpress_network = gcp.compute.Network("wordpress-vpc",
 
 
 # create custom vpc subnet
-wordpress_subnetwork = gcp.compute.Subnetwork("dataflow-demo-subnet1",
+wordpress_subnetwork = gcp.compute.Subnetwork("wordpress-demo-subnet1",
     ip_cidr_range="10.0.2.0/24",
     region=gcp_region,
     network=wordpress_network.id,
