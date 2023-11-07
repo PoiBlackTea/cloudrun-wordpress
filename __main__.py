@@ -7,6 +7,7 @@ import pulumi_gcp as gcp
 config = pulumi.Config()
 gcp_config = pulumi.Config("gcp")
 gcp_region = gcp_config.require("region")
+gcp_zone = f"{gcp_region}-a"
 
 wordpress = pulumi.Config("wordpress")
 wordpress_image = wordpress.require("image")
@@ -153,7 +154,7 @@ default_account = gcp.serviceaccount.Account("defaultAccount",
 nfs_instance = gcp.compute.Instance("nfs-server-instance",
     machine_type="e2-medium",
     deletion_protection=True,
-    zone=f"{gcp_region}-a",
+    zone=gcp_zone,
     tags=[
         "nfs"
     ],
@@ -175,6 +176,32 @@ nfs_instance = gcp.compute.Instance("nfs-server-instance",
     ),
     opts=pulumi.ResourceOptions(depends_on=[nat]),
     )
+
+# create gce scheduled snapshot
+Scheduled_snapshot_policy = gcp.compute.ResourcePolicy("scheduled_snapshot_policy",
+    description="scheduled snapshot",
+    region=gcp_region,
+    snapshot_schedule_policy=gcp.compute.ResourcePolicySnapshotSchedulePolicyArgs(
+        retention_policy=gcp.compute.ResourcePolicySnapshotSchedulePolicyRetentionPolicyArgs(
+            max_retention_days=14,
+            on_source_disk_delete="KEEP_AUTO_SNAPSHOTS",
+        ),
+        schedule=gcp.compute.ResourcePolicySnapshotSchedulePolicyScheduleArgs(
+            daily_schedule=gcp.compute.ResourcePolicySnapshotSchedulePolicyScheduleDailyScheduleArgs(
+                days_in_cycle=1,
+                start_time="23:00",
+            ),
+        ),
+        snapshot_properties=gcp.compute.ResourcePolicySnapshotSchedulePolicySnapshotPropertiesArgs(
+            chain_name="scheduled_snapshot",
+            storage_locations=gcp_region
+        ),
+    ))
+
+Attachment = gcp.compute.DiskResourcePolicyAttachment("attachment",
+    disk=nfs_instance.boot_disks[0].device_name,
+    name=Scheduled_snapshot_policy.name,
+    zone=gcp_zone)
 
 
 # create cloud run service
@@ -287,21 +314,6 @@ default_firewall = gcp.compute.Firewall("allow-from-iap",
     ],
     priority=500,
     source_ranges=["35.235.240.0/20"])
-
-# cloudrun_firewall = gcp.compute.Firewall("allow-from-cloudrun",
-#     network=wordpress_network.name,
-#     allows=[
-#         gcp.compute.FirewallAllowArgs(
-#             protocol="tcp",
-#             ports=[
-#                 "3306",
-#                 "111",
-#                 "2049"
-#             ],
-#         ),
-#     ],
-#     priority=500,
-#     source_ranges=["10.8.0.0/28"])
 
 
 pulumi.export("cloud_sql_instance_name", pulumi.Output.format(wordpress_cloudsql.name))
