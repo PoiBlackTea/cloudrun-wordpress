@@ -33,8 +33,7 @@ After cloning this repo, `cd` into it and run these commands.
     ```
 
     ```
-    docker buildx build --platform linux/amd64 -t us-central1-docker.pkg.dev/<your-gcp-project>/<REPOSITORY>/<image-name>:<tag> .
-    docker push us-central1-docker.pkg.dev/<your-gcp-project>/<REPOSITORY>/<image-name>:<tag>
+    docker buildx build --cache-to type=inline --platform linux/amd64 --push -t us-central1-docker.pkg.dev/<your-gcp-project>/<REPOSITORY>/<image-name>:<tag> .
     ```
 
 2. Create a new stack, which is an isolated deployment target for this example:
