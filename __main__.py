@@ -2,28 +2,30 @@
 
 import pulumi
 import pulumi_gcp as gcp
+import pulumi_docker as docker
 
 
 config = pulumi.Config()
 gcp_config = pulumi.Config("gcp")
 gcp_region = gcp_config.require("region")
+gcp_project = gcp_config.require("project")
 gcp_zone = f"{gcp_region}-a"
 
 wordpress = pulumi.Config("wordpress")
-wordpress_image = wordpress.require("image")
+tag = wordpress.require("tag")
 cloudsql_disk_size = wordpress.require("disk_size")
 cloudsql_instance_tier = wordpress.require("tier")
 cloudsql_user = wordpress.require("user")
 cloudsql_db = wordpress.require("db")
 
 # gce startup_script for wordpress nfs
-startup_script = """#!/bin/bash
+startup_script = f"""#!/bin/bash
 apt update -y 
 apt upgrade -y
 apt install nfs-kernel-server -y
 mkdir -p /opt/nfs
-curl https://downloads.bitnami.com/files/stacksmith/wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz -O
-tar -zxf wordpress-6.3.2-1-linux-amd64-debian-11.tar.gz -C /opt/nfs --strip-components=4 --no-same-owner --wildcards '*/files/wordpress/wp-content/*'
+curl https://downloads.bitnami.com/files/stacksmith/wordpress-{tag}-1-linux-amd64-debian-11.tar.gz -O
+tar -zxf wordpress-{tag}-1-linux-amd64-debian-11.tar.gz -C /opt/nfs --strip-components=4 --no-same-owner --wildcards '*/files/wordpress/wp-content/*'
 chown -R daemon:www-data /opt/nfs
 chmod -R 766 /opt/nfs
 echo '/opt/nfs 10.8.0.0/28(rw,sync,no_subtree_check,no_root_squash)' > /etc/exports
@@ -32,6 +34,40 @@ systemctl enable nfs-server
 curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
 bash add-google-cloud-ops-agent-repo.sh --also-install
 apt autoremove -y"""
+
+
+
+repository_id = "demo-wordpress"
+cloudrun_name = "wordpress"
+wordpress_image = f"{gcp_region}-docker.pkg.dev/{gcp_project}/{repository_id}/{cloudrun_name}:{tag}"
+build_args = {
+    "tag": tag
+}
+
+
+repo = gcp.artifactregistry.Repository(
+    "my-repo",
+    description="example Docker repository",
+    docker_config=gcp.artifactregistry.RepositoryDockerConfigArgs(
+        immutable_tags=False,
+    ),
+    format="DOCKER",
+    location=gcp_region,
+    repository_id=repository_id
+)
+
+cloudrun_image = docker.Image("cloudrun-image",
+    image_name=wordpress_image,
+    build=docker.DockerBuildArgs(
+        args=build_args,
+        platform="linux/amd64",
+        context=".",
+        dockerfile="Dockerfile",
+    ),
+    opts=pulumi.ResourceOptions(
+        depends_on=[repo]
+    )
+)
 
 
 
@@ -127,7 +163,7 @@ wordpress_cloudsql = gcp.sql.DatabaseInstance("wordpress-database",
     ),
     deletion_protection=True,
     opts=pulumi.ResourceOptions(
-        depends_on=[private_vpc_connection])
+        depends_on=[private_vpc_connection,cloudrun_image])
         )
 
 # create cloudsql user

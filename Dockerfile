@@ -1,5 +1,5 @@
-# syntax=docker/dockerfile:1
-FROM bitnami/wordpress-nginx:6.4.1
+ARG tag=${tag}
+FROM bitnami/wordpress-nginx:${tag}
 
 
 ## Change user to perform privileged actions
