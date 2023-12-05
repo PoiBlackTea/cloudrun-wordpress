@@ -15,25 +15,12 @@ Wordpress image base on bitnami [wordpress-nginx](https://hub.docker.com/r/bitna
 
 After cloning this repo, `cd` into it and run these commands. 
 
-1. Create Artifact Registry and Docker image
-
-    ```
-    gcloud artifacts repositories create <REPOSITORY> \
-        --repository-format=docker \
-        --location=<LOCATION? \
-        --description=>"DESCRIPTION"> \
-        --immutable-tags \
-        --async
-    ```
+1. Setup instructions
 
     Setup instructions
     ```
     gcloud auth configure-docker \
         us-central1-docker.pkg.dev
-    ```
-
-    ```
-    docker buildx build --cache-to type=inline --platform linux/amd64 --push -t us-central1-docker.pkg.dev/<your-gcp-project>/<REPOSITORY>/<image-name>:<tag> .
     ```
 
 2. Create a new stack, which is an isolated deployment target for this example:
@@ -47,8 +34,6 @@ After cloning this repo, `cd` into it and run these commands.
     ```bash
     $ pulumi config set gcp:project <your-gcp-project>
     $ pulumi config set gcp:region <gcp-region>
-    # Cloud Run image
-    $ pulumi config set wordpress:image <artifact registry url>
     # Cloud SQL Disk
     $ pulumi config set wordpress:disk_size <disk size>
     # Cloud SQL instance type
@@ -59,6 +44,8 @@ After cloning this repo, `cd` into it and run these commands.
     $ pulumi config set wordpress:db <db>
     # Cloud SQL password for wordpress
     $ pulumi config set --secret wordpress:dbPassword [your-database-password-here]
+    # bitnami wordpress version
+    $ pulumi config set wordpress:tag <tag>
     ```
 
     cloud sql instance type ref: [instance type](https://cloud.google.com/sql/docs/mysql/instance-settings)
